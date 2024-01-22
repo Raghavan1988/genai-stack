@@ -1,5 +1,6 @@
 import os
-
+from io import BytesIO, StringIO
+import base64
 import streamlit as st
 from langchain.chains import RetrievalQA
 from PyPDF2 import PdfReader
@@ -14,7 +15,7 @@ from chains import (
 
 # load api key lib
 from dotenv import load_dotenv
-
+from langchain.schema.document import Document
 load_dotenv(".env")
 
 
@@ -48,8 +49,19 @@ class StreamHandler(BaseCallbackHandler):
 llm = load_llm(llm_name, logger=logger, config={"ollama_base_url": ollama_base_url})
 
 
+from langchain.chains.combine_documents.stuff import StuffDocumentsChain
+from langchain.chains.llm import LLMChain
+from langchain.prompts import PromptTemplate
+
+# Define prompt
+
+def get_download_link(text, filename="summary.txt"):
+    b64 = base64.b64encode(text.encode()).decode()
+    href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">Download Summary</a>'
+    return href
+
 def main():
-    st.header("📄Chat with your pdf file")
+    st.header("📄Generate Summary of your PDF")
 
     # upload a your pdf file
     pdf = st.file_uploader("Upload your PDF", type="pdf")
@@ -58,8 +70,12 @@ def main():
         pdf_reader = PdfReader(pdf)
 
         text = ""
+        docs = []
         for page in pdf_reader.pages:
+            doc = Document(page_content = page.extract_text(), metadata = {})
+            docs.append(doc)
             text += page.extract_text()
+        
 
         # langchain_textspliter
         text_splitter = RecursiveCharacterTextSplitter(
@@ -79,16 +95,28 @@ def main():
             node_label="PdfBotChunk",
             pre_delete_collection=True,  # Delete existing PDF data
         )
-        qa = RetrievalQA.from_chain_type(
-            llm=llm, chain_type="stuff", retriever=vectorstore.as_retriever()
-        )
+        
 
         # Accept user questions/query
-        query = st.text_input("Ask questions about your PDF file")
-
+        query = st.text_input("Enter your custom Prompt of what you want to accomplish")
         if query:
             stream_handler = StreamHandler(st.empty())
-            qa.run(query, callbacks=[stream_handler])
+            print("here")
+            print(query)
+            prompt_template = "Take a deep breakth and accomplish the TASK below. INSTRUCTION: Accomplish the task and generate the content STRICTLY IN MARKDOWN ONLY\n TASK: "+ query + " \nContent: "
+            prompt_template += "{text}"
+            print(prompt_template)
+            prompt = PromptTemplate.from_template(prompt_template)
+            llm_chain = LLMChain(llm=llm, prompt=prompt)
+            stuff_chain = StuffDocumentsChain(llm_chain=llm_chain, document_variable_name="text")
+            summary = stuff_chain.run(docs, callbacks= [stream_handler])
+            st.subheader("Summary")
+            st.write(summary)
+            print(summary)
+        
+            st.markdown(get_download_link(summary), unsafe_allow_html=True)
+
+
 
 
 if __name__ == "__main__":
